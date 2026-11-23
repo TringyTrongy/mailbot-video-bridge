@@ -77,7 +77,8 @@ def process_video(query_or_url):
             "--no-update",
             "--no-playlist",
             "--remote-components", "ejs:github",
-            "-f", "best[ext=mp4][height<=480]/best[height<=480]/best[ext=mp4]/best",
+            "-S", "res:360,ext:mp4:m4a",
+            "--recode-video", "mp4",
             "-o", out_tmpl
         ]
 
@@ -104,7 +105,7 @@ def process_video(query_or_url):
         if res.stderr:
             print(f"yt-dlp stderr: {res.stderr[-300:]}")
 
-        files = [os.path.join(temp_dir, f) for f in os.listdir(temp_dir) if f.endswith((".mp4", ".mkv", ".webm"))]
+        files = [os.path.join(temp_dir, f) for f in os.listdir(temp_dir) if f.endswith(".mp4")]
         if not files:
             raise RuntimeError(f"yt-dlp failed to download video: {res.stderr.strip() or res.stdout.strip() or 'No media file generated'}")
 
@@ -138,19 +139,22 @@ def process_video(query_or_url):
         s_res = subprocess.run(split_cmd, capture_output=True, text=True)
         if s_res.returncode != 0:
             print(f"ffmpeg split warning: {s_res.stderr}")
-            url = upload_catbox(main_vid)
-            return {"title": title, "single": True, "parts": [url]}
 
-        segments = sorted([os.path.join(temp_dir, f) for f in os.listdir(temp_dir) if f.startswith("segment_")])
+        segments = sorted([os.path.join(temp_dir, f) for f in os.listdir(temp_dir) if f.startswith("segment_") and f.endswith(".mp4")])
         part_urls = []
-        for seg in segments:
-            u = upload_catbox(seg)
+        if segments:
+            for seg in segments:
+                u = upload_catbox(seg)
+                if u:
+                    part_urls.append(u)
+
+        if not part_urls:
+            u = upload_catbox(main_vid)
             if u:
                 part_urls.append(u)
 
         if not part_urls:
-            url = upload_catbox(main_vid)
-            part_urls = [url]
+            raise RuntimeError("Failed to upload MP4 parts to hosting storage")
 
         return {
             "title": title,
