@@ -33,12 +33,11 @@ def process_video(query_or_url):
     temp_dir = tempfile.mkdtemp(prefix="mailbot_vid_")
     try:
         out_tmpl = os.path.join(temp_dir, "%(title).40s.%(ext)s")
-        # Try progressive 360p mp4 directly (no recode needed if ffmpeg is missing)
+        # Support both direct video and search queries without failing on yt-dlp exit 101
         cmd = [
             "yt-dlp",
             "--no-update",
             "--no-playlist",
-            "--max-downloads", "1",
             "-f", "best[ext=mp4][height<=480]/best[height<=480]/best[ext=mp4]/best",
             "--extractor-args", "youtube:player_client=android,ios,web",
             "-o", out_tmpl,
@@ -47,15 +46,14 @@ def process_video(query_or_url):
         print(f"Executing: {' '.join(cmd)}")
         res = subprocess.run(cmd, capture_output=True, text=True)
         print(f"yt-dlp exit: {res.returncode}")
-        print(f"yt-dlp stdout: {res.stdout[:500]}")
-        print(f"yt-dlp stderr: {res.stderr[:500]}")
-
-        if res.returncode != 0:
-            raise RuntimeError(f"yt-dlp failed (code {res.returncode}): {res.stderr.strip() or res.stdout.strip()}")
+        if res.stdout:
+            print(f"yt-dlp stdout: {res.stdout[-400:]}")
+        if res.stderr:
+            print(f"yt-dlp stderr: {res.stderr[-400:]}")
 
         files = [os.path.join(temp_dir, f) for f in os.listdir(temp_dir) if f.endswith((".mp4", ".mkv", ".webm"))]
         if not files:
-            raise RuntimeError(f"No video file found in {os.listdir(temp_dir)}")
+            raise RuntimeError(f"yt-dlp failed to download video: {res.stderr.strip() or res.stdout.strip() or 'No media file generated'}")
 
         main_vid = files[0]
         file_size = os.path.getsize(main_vid)
@@ -86,8 +84,7 @@ def process_video(query_or_url):
         ]
         s_res = subprocess.run(split_cmd, capture_output=True, text=True)
         if s_res.returncode != 0:
-            print(f"ffmpeg split failed: {s_res.stderr}")
-            # If split fails, upload full file anyway if close to limit
+            print(f"ffmpeg split warning: {s_res.stderr}")
             url = upload_catbox(main_vid)
             return {"title": title, "single": True, "parts": [url]}
 
@@ -99,11 +96,12 @@ def process_video(query_or_url):
                 part_urls.append(u)
 
         if not part_urls:
-            raise RuntimeError("Failed to upload video segments")
+            url = upload_catbox(main_vid)
+            part_urls = [url]
 
         return {
             "title": title,
-            "single": False,
+            "single": len(part_urls) == 1,
             "parts": part_urls
         }
     finally:
