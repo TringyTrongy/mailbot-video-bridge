@@ -14,6 +14,43 @@ app = FastAPI(title="Mailbot Video Bridge")
 
 MAX_PART_BYTES = 18 * 1024 * 1024
 
+def ensure_deno():
+    repo_bin = os.path.abspath(os.path.join(os.path.dirname(__file__), "bin"))
+    if os.path.isdir(repo_bin) and repo_bin not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = f"{repo_bin}:{os.environ.get('PATH', '')}"
+    if shutil.which("deno"):
+        return shutil.which("deno")
+    bin_dir = "/tmp/bin"
+    deno_path = os.path.join(bin_dir, "deno")
+    if os.path.exists(deno_path) and os.access(deno_path, os.X_OK):
+        if bin_dir not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = f"{bin_dir}:{os.environ.get('PATH', '')}"
+        return deno_path
+    
+    print("Downloading standalone Deno binary for yt-dlp EJS challenge solver...")
+    os.makedirs(bin_dir, exist_ok=True)
+    zip_path = os.path.join(bin_dir, "deno.zip")
+    url = "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip"
+    try:
+        import urllib.request
+        import zipfile
+        urllib.request.urlretrieve(url, zip_path)
+        with zipfile.ZipFile(zip_path, 'r') as zf:
+            zf.extractall(bin_dir)
+        os.chmod(deno_path, 0o755)
+        if os.path.exists(zip_path):
+            os.remove(zip_path)
+        if bin_dir not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = f"{bin_dir}:{os.environ.get('PATH', '')}"
+        print("Deno configured successfully at:", deno_path)
+        return deno_path
+    except Exception as e:
+        print(f"Failed to auto-download Deno: {e}")
+        return None
+
+# Ensure Deno is preloaded at module import
+ensure_deno()
+
 def upload_catbox(file_path):
     try:
         cmd = [
@@ -31,6 +68,7 @@ def upload_catbox(file_path):
     return None
 
 def process_video(query_or_url):
+    ensure_deno()
     temp_dir = tempfile.mkdtemp(prefix="mailbot_vid_")
     try:
         out_tmpl = os.path.join(temp_dir, "%(title).40s.%(ext)s")
@@ -38,6 +76,7 @@ def process_video(query_or_url):
             "yt-dlp",
             "--no-update",
             "--no-playlist",
+            "--remote-components", "ejs:github",
             "-f", "best[ext=mp4][height<=480]/best[height<=480]/best[ext=mp4]/best",
             "-o", out_tmpl
         ]
@@ -57,7 +96,7 @@ def process_video(query_or_url):
 
         cmd.append(query_or_url)
 
-        print(f"Executing: {' '.join(cmd[:6])} ...")
+        print(f"Executing: {' '.join(cmd[:8])} ...")
         res = subprocess.run(cmd, capture_output=True, text=True)
         print(f"yt-dlp exit: {res.returncode}")
         if res.stdout:
@@ -136,6 +175,7 @@ def diag():
     return {
         "ffmpeg": shutil.which("ffmpeg"),
         "curl": shutil.which("curl"),
+        "deno": shutil.which("deno"),
         "has_secret_cookies": secret_exists,
         "secret_cookies_bytes": secret_size,
         "has_env_cookies": bool(os.environ.get("YOUTUBE_COOKIES_B64")),
