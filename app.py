@@ -3,6 +3,7 @@ import sys
 import re
 import json
 import shutil
+import base64
 import subprocess
 import tempfile
 import urllib.parse
@@ -33,23 +34,36 @@ def process_video(query_or_url):
     temp_dir = tempfile.mkdtemp(prefix="mailbot_vid_")
     try:
         out_tmpl = os.path.join(temp_dir, "%(title).40s.%(ext)s")
-        # Support both direct video and search queries without failing on yt-dlp exit 101
         cmd = [
             "yt-dlp",
             "--no-update",
             "--no-playlist",
             "-f", "best[ext=mp4][height<=480]/best[height<=480]/best[ext=mp4]/best",
-            "--extractor-args", "youtube:player_client=android,ios,web",
-            "-o", out_tmpl,
-            query_or_url
+            "-o", out_tmpl
         ]
-        print(f"Executing: {' '.join(cmd)}")
+
+        # Use Render secret file or env var cookies if available
+        secret_cookies = "/etc/secrets/cookies.txt"
+        env_b64 = os.environ.get("YOUTUBE_COOKIES_B64", "")
+        if os.path.exists(secret_cookies) and os.path.getsize(secret_cookies) > 20:
+            print("Using /etc/secrets/cookies.txt")
+            cmd.extend(["--cookies", secret_cookies])
+        elif env_b64:
+            c_path = os.path.join(temp_dir, "cookies.txt")
+            with open(c_path, "wb") as cf:
+                cf.write(base64.b64decode(env_b64))
+            print("Using env YOUTUBE_COOKIES_B64")
+            cmd.extend(["--cookies", c_path])
+
+        cmd.append(query_or_url)
+
+        print(f"Executing: {' '.join(cmd[:6])} ...")
         res = subprocess.run(cmd, capture_output=True, text=True)
         print(f"yt-dlp exit: {res.returncode}")
         if res.stdout:
-            print(f"yt-dlp stdout: {res.stdout[-400:]}")
+            print(f"yt-dlp stdout: {res.stdout[-300:]}")
         if res.stderr:
-            print(f"yt-dlp stderr: {res.stderr[-400:]}")
+            print(f"yt-dlp stderr: {res.stderr[-300:]}")
 
         files = [os.path.join(temp_dir, f) for f in os.listdir(temp_dir) if f.endswith((".mp4", ".mkv", ".webm"))]
         if not files:
@@ -117,10 +131,14 @@ def health():
 
 @app.get("/diag")
 def diag():
-    import shutil
+    secret_exists = os.path.exists("/etc/secrets/cookies.txt")
+    secret_size = os.path.getsize("/etc/secrets/cookies.txt") if secret_exists else 0
     return {
         "ffmpeg": shutil.which("ffmpeg"),
         "curl": shutil.which("curl"),
+        "has_secret_cookies": secret_exists,
+        "secret_cookies_bytes": secret_size,
+        "has_env_cookies": bool(os.environ.get("YOUTUBE_COOKIES_B64")),
         "python": sys.version
     }
 
